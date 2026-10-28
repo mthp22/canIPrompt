@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: caniprompt-api
+    runtime: docker
+    rootDir: .
+    dockerfilePath: ./apps/api/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: WEB_ORIGIN
+        sync: false
+      - key: PORT
+        value: 3000
+
+  - type: web
+    name: caniprompt-web
+    runtime: static
+    rootDir: apps/web
+    buildCommand: bun install --cwd ../.. && bun run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -1,15 +1,10 @@
 {
-  "name": "canIPrompt",
-  "version": "1.0.50",
+  "name": "caniprompt",
+  "private": true,
+  "workspaces": ["apps/*"],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "bun run --watch src/index.ts"
-  },
-  "dependencies": {
-    "elysia": "latest"
-  },
-  "devDependencies": {
-    "bun-types": "latest"
-  },
-  "module": "src/index.js"
+    "dev": "bun --filter '@caniprompt/api' dev & bun --filter '@caniprompt/web' dev",
+    "test": "bun --filter '@caniprompt/api' test",
+    "build": "bun --filter '@caniprompt/api' build && bun --filter '@caniprompt/web' build"
+  }
 }
