@@ -9,11 +9,14 @@ testability — and returns an overall score, a rubric breakdown, risks, and a
 stronger rewritten prompt. Generated code can be scored separately against the
 original prompt.
 
-> **Deterministic mode notice:** this MVP ships a keyword-based heuristic
-> evaluator. Every response is labelled `"mode": "heuristic"` in the API and
-> `HEURISTIC` in the UI. The heuristic is a rough signal, not an AI judgement,
-> and it can be fooled by keywords. AI-assisted evaluation is planned for a
-> later phase.
+> **Two evaluation modes:** CanIPrompt scores with an AI evaluator when
+> `OPENAI_API_KEY` is configured, and falls back to a deterministic keyword
+> heuristic otherwise. Every response declares its mode: `"mode": "ai"` or
+> `"mode": "heuristic"` in the API, and an `AI EVALUATED` / `HEURISTIC` tag in
+> the UI. The heuristic is a rough signal, not an AI judgement, and it can be
+> fooled by keywords — the UI states plainly which mode produced a score. If AI
+> evaluation is configured but the provider fails, the request returns HTTP 503
+> rather than quietly relabelling a heuristic score as an AI result.
 
 ## Stack
 
@@ -103,6 +106,9 @@ Verify the API:
 ```bash
 curl http://localhost:3000/health
 
+# Which evaluator is active — "ai" or "heuristic"
+curl http://localhost:3000/api/status
+
 curl -X POST http://localhost:3000/api/evaluate \
   -H "Content-Type: application/json" \
   -d '{
@@ -125,12 +131,31 @@ curl -X POST http://localhost:3000/api/evaluate \
 - `code` — optional, 1–40,000 characters. Static review only; code is never
   executed by the API.
 
-Response: overall `score`, `verdict`, `mode`, `rubricVersion`, per-dimension
-scores with reasons, `strengths`, `issues`, `improvements`, a
-`rewrittenPrompt`, and (when `code` is supplied) an honest `codeReview` stub.
+Response: overall `score`, `verdict`, `mode` (`"ai"` or `"heuristic"`),
+`rubricVersion`, per-dimension scores with reasons, `strengths`, `issues`,
+`improvements`, a `rewrittenPrompt`, and — when `code` is supplied — a
+`codeReview` (a real static review under AI evaluation, an honest stub under
+the heuristic).
 
-Errors: `400` invalid body (TypeBox validation), `429` rate limited,
-`500` internal.
+The overall score is always computed on the server from the weighted
+dimensions; a model's claimed score is never trusted. Dimension scores are
+clamped to 0–100 and every rubric key must be present, or the response is
+rejected rather than partially returned.
+
+Errors: `400` invalid body (TypeBox validation), `429` rate limited, `503`
+AI evaluator configured but unavailable (never silently downgraded to a
+heuristic score), `500` internal.
+
+### `GET /api/status`
+
+Tells the client which evaluator will run, so the UI can label scores honestly
+and word the privacy note correctly.
+
+```json
+{ "evaluator": "ai", "model": "gpt-4.1-mini", "rubricVersion": "1.0" }
+```
+
+Without an API key: `{ "evaluator": "heuristic", "rubricVersion": "1.0" }`.
 
 ### `GET /health`
 
@@ -166,15 +191,18 @@ deploying:
    `--frozen-lockfile` build works.
 2. Set `WEB_ORIGIN` to the deployed frontend origin and `VITE_API_URL` to the
    deployed API origin.
-3. Configure DNS/HTTPS for `leborengmathope.dev` (pick a canonical hostname
+3. Set `OPENAI_API_KEY` (a server-side secret) and, optionally, `OPENAI_MODEL`
+   to enable AI evaluation. Leave the key unset to run heuristic-only.
+4. Configure DNS/HTTPS for `leborengmathope.dev` (pick a canonical hostname
    and redirect the other).
 
 ## Roadmap
 
-- **Phase 1 (this MVP):** prompt editor, six scoring dimensions, heuristic
-  mode, rewritten prompts, optional code-review slot, API validation.
-- **Phase 2:** AI evaluator with structured JSON output, complete API test
-  coverage, benchmark calibration, distributed rate limiting, privacy
-  controls, spending limits.
+- **Phase 1 (done):** prompt editor, six scoring dimensions, heuristic mode,
+  rewritten prompts, optional code-review slot, API validation.
+- **Phase 2 (in progress):** ✅ AI evaluator with structured JSON output, honest
+  mode labelling, `/api/status`, provider-failure → 503, mocked-provider test
+  suite. Remaining: benchmark calibration against human reference ratings,
+  distributed rate limiting, privacy/retention controls, spending limits.
 - **Phase 3:** prompt version history, side-by-side comparisons,
   framework-specific rubrics, reusable templates, sandboxed test execution.
