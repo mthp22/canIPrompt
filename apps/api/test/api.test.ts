@@ -1,7 +1,40 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { app, resetRateLimiter } from "../src/app";
+import { setCompletionFn, DIMENSIONS } from "../src/evaluator";
 
 const EVALUATE_URL = "http://localhost/api/evaluate";
+const STATUS_URL = "http://localhost/api/status";
+
+// Pin evaluator config for the whole file so tests are hermetic.
+// Bun reads process.env lazily at call time, so setting these at module
+// scope keeps every test deterministic regardless of the host .env.
+const ENV_KEYS = [
+  "EVAL_PROVIDER",
+  "OLLAMA_MODEL",
+  "OLLAMA_HOST",
+  "OPENAI_API_KEY",
+  "OPENAI_MODEL"
+] as const;
+
+const savedEnv: Record<string, string | undefined> = {};
+
+for (const key of ENV_KEYS) {
+  savedEnv[key] = process.env[key];
+  delete process.env[key];
+}
+
+// Default to heuristic mode for this file so "no AI configured" paths are
+// deterministic and never reach a live provider. AI-path tests set an
+// explicit EVAL_PROVIDER (or inject a completion stub) to opt back in.
+process.env.EVAL_PROVIDER = "heuristic";
+
+// Restore the host environment when this file's tests finish.
+process.on("exit", () => {
+  for (const key of ENV_KEYS) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
+});
 
 const validPrompt = `Implement a TypeScript REST endpoint for creating projects.
 Validate the request body and reject invalid names with HTTP 400.
@@ -23,6 +56,9 @@ function post(body: unknown) {
 
 beforeEach(() => {
   resetRateLimiter();
+  // Start each test from a known-clean evaluator state.
+  setCompletionFn(undefined);
+  delete process.env.OPENAI_API_KEY;
 });
 
 test("health check returns 200", async () => {
@@ -138,4 +174,73 @@ test("returns 429 after exceeding the rate limit", async () => {
 
   expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
   expect(statuses[20]).toBe(429);
+});
+
+test("status reports heuristic mode with no key configured", async () => {
+  const response = await app.handle(new Request(STATUS_URL));
+
+  expect(response.status).toBe(200);
+
+  const data = await response.json();
+  expect(data.evaluator).toBe("heuristic");
+  expect(data.model).toBeUndefined();
+  expect(typeof data.rubricVersion).toBe("string");
+});
+
+test("status reports ai mode when a key is configured", async () => {
+  process.env.EVAL_PROVIDER = "openai";
+  process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
+
+  const response = await app.handle(new Request(STATUS_URL));
+
+  expect(response.status).toBe(200);
+
+  const data = await response.json();
+  expect(data.evaluator).toBe("ai");
+  expect(typeof data.model).toBe("string");
+});
+
+test("maps evaluator failure to 503 without leaking details", async () => {
+  process.env.OPENAI_API_KEY = "sk-test-not-a-real-key";
+  setCompletionFn(async () => {
+    throw new Error("provider leaked secret sk-test-not-a-real-key");
+  });
+
+  const response = await post({ prompt: validPrompt });
+
+  expect(response.status).toBe(503);
+
+  const text = await response.text();
+  expect(text).not.toContain("sk-test-not-a-real-key");
+  expect(text).not.toContain("provider leaked");
+
+  const data = JSON.parse(text);
+  expect(data.code).toBe("EVALUATOR_UNAVAILABLE");
+});
+
+test("returns an AI evaluation when the provider responds", async () => {
+  setCompletionFn(async () =>
+    JSON.stringify({
+      dimensions: DIMENSIONS.map((d) => ({
+        key: d.key,
+        score: 88,
+        reason: `Reason for ${d.key}.`
+      })),
+      strengths: ["Well specified."],
+      issues: [],
+      improvements: ["Add rollback steps."],
+      rewrittenPrompt: "Improved prompt.",
+      codeReview: null
+    })
+  );
+
+  const response = await post({ prompt: validPrompt });
+
+  expect(response.status).toBe(200);
+
+  const data = await response.json();
+  expect(data.mode).toBe("ai");
+  expect(data.score).toBe(88);
+  expect(data.verdict).toBe("Good");
+  expect(data.rewrittenPrompt).toBe("Improved prompt.");
 });

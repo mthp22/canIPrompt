@@ -35,12 +35,14 @@ describe("CanIPrompt benchmark suite", () => {
       expect(result.score).toBeLessThanOrEqual(100);
 
       if ("maxScore" in benchmark) {
-        expect(result.score).toBeLessThanOrEqual(benchmark.maxScore);
+        expect(result.score).toBeLessThanOrEqual(
+          benchmark.maxScore ?? Infinity
+        );
       }
 
       if ("minScore" in benchmark) {
         expect(result.score).toBeGreaterThanOrEqual(
-          benchmark.minScore
+          benchmark.minScore ?? -Infinity
         );
       }
     });
