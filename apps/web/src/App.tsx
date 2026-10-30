@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Dimension = {
   key: string;
@@ -23,6 +23,12 @@ type Result = {
     findings: string[];
     caveat: string;
   };
+};
+
+type Status = {
+  evaluator: "ai" | "heuristic";
+  model?: string;
+  rubricVersion: string;
 };
 
 const API_URL = (
@@ -55,6 +61,23 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<Status | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(`${API_URL}/api/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: Status | null) => {
+        if (!cancelled && data) setStatus(data);
+      })
+      .catch(() => {
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleEvaluate() {
     setLoading(true);
@@ -180,6 +203,21 @@ export default function App() {
             />
           )}
 
+          {status && (
+            <div
+              className={
+                status.evaluator === "ai"
+                  ? "evaluator-badge ai"
+                  : "evaluator-badge heuristic"
+              }
+            >
+              <span className="badge-dot" aria-hidden="true" />
+              {status.evaluator === "ai"
+                ? `AI evaluator active · ${status.model ?? "model"}`
+                : "Heuristic mode — no API key configured"}
+            </div>
+          )}
+
           <button
             className="primary-button"
             disabled={loading || prompt.trim().length < 20}
@@ -191,10 +229,9 @@ export default function App() {
           </button>
 
           <p className="privacy-note">
-            Your prompt and any pasted code are sent to this app's API
-            for analysis and are not stored. Scoring in this version is
-            deterministic, not AI-generated. Do not submit secrets or
-            credentials.
+            {status?.evaluator === "ai"
+              ? "Your prompt and any pasted code are sent to this app's API and then to the configured AI provider for scoring. Nothing is stored. Do not submit secrets or credentials."
+              : "Your prompt and any pasted code are sent only to this app's API and are not stored or forwarded. Scoring here is deterministic, not AI-generated. Do not submit secrets or credentials."}
           </p>
         </div>
 
@@ -258,8 +295,13 @@ export default function App() {
             <div className="result-content">
               <div className="result-topline">
                 <span className="step">EVALUATION REPORT</span>
-                <span className="mode-tag">
-                  {result.mode === "ai" ? "AI EVALUATED" : "HEURISTIC"}
+                <span className="report-meta">
+                  <span className="rubric-tag">
+                    RUBRIC v{result.rubricVersion}
+                  </span>
+                  <span className="mode-tag">
+                    {result.mode === "ai" ? "AI EVALUATED" : "HEURISTIC"}
+                  </span>
                 </span>
               </div>
 
