@@ -1,6 +1,10 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { evaluate } from "./evaluator";
+import {
+  evaluate,
+  getEvaluatorStatus,
+  EvaluatorUnavailableError
+} from "./evaluator";
 
 const MAX_PROMPT_LENGTH = 20_000;
 const MAX_CODE_LENGTH = 40_000;
@@ -86,14 +90,26 @@ export const app = new Elysia({ normalize: false })
       return { error: "Invalid request", code: "VALIDATION" };
     }
 
-    if (error.message === "Rate limit exceeded") {
+    // `error` is a broad union; narrow to a message string safely.
+    const message =
+      error instanceof Error ? error.message : String(error);
+
+    if (message === "Rate limit exceeded") {
       set.status = 429;
       return { error: "Too many requests. Try again shortly." };
     }
 
+    if (error instanceof EvaluatorUnavailableError) {
+      set.status = 503;
+      return {
+        error: "Evaluation temporarily unavailable",
+        code: "EVALUATOR_UNAVAILABLE"
+      };
+    }
+
     // Log the message only. Never log prompts, source code, API keys,
     // or complete upstream error responses.
-    console.error("API error:", error.message);
+    console.error("API error:", message);
     set.status = 500;
     return { error: "Internal server error" };
   })
@@ -101,6 +117,7 @@ export const app = new Elysia({ normalize: false })
     status: "ok",
     service: "caniprompt-api"
   }))
+  .get("/api/status", () => getEvaluatorStatus())
   .post(
     "/api/evaluate",
     async ({ body }) => evaluate(body),
